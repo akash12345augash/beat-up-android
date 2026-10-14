@@ -30,56 +30,69 @@ jobs:
           packages: 'platform-tools'
 
       - name: Install Android SDK packages
-        run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Find Android project or extract ZIP
+      - name: Find Android project
         shell: bash
         run: |
-          set -e
-          PROJECT_DIR=""
-
-          find_project() {
-            find "$1" \
-              -type f \
-              \( -name settings.gradle.kts -o -name settings.gradle \) \
-              -not -path '*/.gradle/*' \
-              -print -quit
-          }
-
-          SETTINGS="$(find_project "$GITHUB_WORKSPACE")"
+          SETTINGS=$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            \( -name settings.gradle.kts -o -name settings.gradle \) \
+            -not -path '*/.gradle/*' \
+            -print -quit)
 
           if [ -z "$SETTINGS" ]; then
-            while IFS= read -r ZIP; do
-              echo "Extracting: $ZIP"
-              mkdir -p "$RUNNER_TEMP/beatup-source"
-              unzip -oq "$ZIP" -d "$RUNNER_TEMP/beatup-source"
-              SETTINGS="$(find_project "$RUNNER_TEMP/beatup-source")"
-              if [ -n "$SETTINGS" ]; then
-                break
-              fi
-            done < <(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -iname '*.zip')
-          fi
-
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: No Android Gradle project was found."
-            echo "Upload the source project files or a ZIP containing them."
-            echo "The project must contain settings.gradle.kts or settings.gradle."
+            echo "ERROR: Gradle settings file not found"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS")"
-          echo "Android project found at: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Align Java and Kotlin JVM targets
+        shell: bash
+        run: |
+          python3 - "$PROJECT_DIR" <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          for p in root.rglob("*.gradle.kts"):
+              if ".gradle" in p.parts or "build" in p.parts:
+                  continue
+              s = p.read_text()
+              if p.name == "build.gradle.kts" and "app" in p.parts:
+                  if "compileOptions" in s:
+                      import re
+                      s = re.sub(
+                          r'JavaVersion\.VERSION_1_8',
+                          'JavaVersion.VERSION_17', s
+                      )
+                  else:
+                      s += """
+          
+          android {
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          }
+          """
+                  if "kotlinOptions" not in s and "compilerOptions" not in s:
+                      s += """
+          
+          tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+              kotlinOptions.jvmTarget = "17"
+          }
+          """
+                  p.write_text(s)
+          PY
 
       - name: Build Beat Up APK
-        run: |
-          gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
+        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: beat-up-debug-apk
-          path: |
-            **/build/outputs/apk/debug/*.apk
+          path: '**/build/outputs/apk/debug/*.apk'
           if-no-files-found: error
