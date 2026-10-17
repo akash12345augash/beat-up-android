@@ -1,38 +1,95 @@
 
-      - name: Find Android project or extract ZIP
+name: Beat Up Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Extract Android project ZIP
         shell: bash
         run: |
           set -e
-          SEARCH_DIR="$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/beatup-source"
 
-          find_settings() {
-            find "$1" -type f \
-              \( -name settings.gradle.kts -o -name settings.gradle \) \
-              -not -path '*/.gradle/*' -print -quit
-          }
+          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 2 \
+            -type f -name 'BeatUp-Complete-Fixed.zip' -print -quit)"
 
-          SETTINGS="$(find_settings "$SEARCH_DIR")"
-
-          if [ -z "$SETTINGS" ]; then
-            while IFS= read -r -d '' ZIPFILE; do
-              echo "Extracting project ZIP: $ZIPFILE"
-              DEST="$RUNNER_TEMP/beatup-extracted"
-              mkdir -p "$DEST"
-              unzip -oq "$ZIPFILE" -d "$DEST"
-              SETTINGS="$(find_settings "$DEST")"
-              if [ -n "$SETTINGS" ]; then
-                break
-              fi
-            done < <(find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -print0)
+          if [ -z "$ZIP" ]; then
+            ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 2 \
+              -type f -iname '*.zip' -print -quit)"
           fi
 
+          if [ -n "$ZIP" ]; then
+            echo "Extracting $ZIP"
+            unzip -oq "$ZIP" -d "$RUNNER_TEMP/beatup-source"
+          else
+            echo "No ZIP found; checking repository files."
+            cp -R "$GITHUB_WORKSPACE/." "$RUNNER_TEMP/beatup-source/"
+          fi
+
+          SETTINGS="$(find "$RUNNER_TEMP/beatup-source" \
+            -type f \( -name settings.gradle.kts -o -name settings.gradle \) \
+            -not -path '*/.gradle/*' -print -quit)"
+
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: No Gradle project found."
-            echo "The repository must contain Android source files or a ZIP containing them."
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f | head -100
+            echo "ERROR: No Gradle settings file found."
+            find "$RUNNER_TEMP/beatup-source" -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project at: $PROJECT_DIR"
+          echo "Found project at $PROJECT_DIR"
+
+      - name: Fix Kotlin build file if needed
+        shell: bash
+        run: |
+          python3 - "$PROJECT_DIR/app/build.gradle.kts" <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          s = re.sub(
+              r'kotlin\s*\{\s*jvmToolchain\(17\)\s*\}\s*\}',
+              'kotlin {\n    jvmToolchain(17)\n}',
+              s,
+              count=1
+          )
+          p.write_text(s)
+          print("Checked:", p)
+          PY
+
+      - name: Build Beat Up APK
+        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: beat-up-debug-apk
+          path: ${{ runner.temp }}/beatup-source/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
