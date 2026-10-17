@@ -5,7 +5,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main, master]
-  pull_request:
 
 permissions:
   contents: read
@@ -24,16 +23,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Extract Beat Up ZIP
+      - name: Extract fixed project
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No project ZIP found in repository root"
+          ZIP_FILE="BeatUp-JVM-Fixed.zip"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "Upload BeatUp-JVM-Fixed.zip to repository root."
             exit 1
           fi
           unzip -o "$ZIP_FILE" -d .
-          test -f settings.gradle.kts
-          test -f app/build.gradle.kts
+          echo "Checking Java and Kotlin targets:"
+          grep -A 4 'compileOptions' app/build.gradle.kts
+          grep -A 2 'kotlinOptions' app/build.gradle.kts
+          grep -q 'VERSION_17' app/build.gradle.kts
+          grep -q 'jvmTarget = "17"' app/build.gradle.kts
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
