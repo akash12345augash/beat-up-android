@@ -24,6 +24,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Extract uploaded project ZIP
+        run: |
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Upload the Beat Up project ZIP to the repository root."
+            exit 1
+          fi
+          unzip -o "$ZIP_FILE" -d .
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -36,13 +48,6 @@ jobs:
 
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Verify project files
-        run: |
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
 
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
